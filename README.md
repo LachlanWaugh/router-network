@@ -117,7 +117,8 @@ A process engaged in the first phase of 2PC must abort if it waits for, and does
 Routing table dump request: This message must be answered by sending a message of the form {table, self (), Dump} directly to From, where Dump is the structure obtained by evaluating the expression ets:match (Table, '$1'), assuming Table is the routing table of the node. This message is sent directly to a node and not propagated through the router network.
 stop
 Terminate router: The router process receiving this message must terminate after de-allocating its routing table. This message is sent directly to a node and is not propagated through the router network. Routers should not be terminated while they are engaged in 2PC, i.e. a stop message received while a router is in 2PC should only be processed after the 2PC is complete.
-Message Flow
+
+## Message Flow
 It is important to note that routed messages, control messages, and other messages needed for 2PC, flow through the network in entirely different ways.
 
 Routed messages: Routed messages may only flow along edges in the network graph whose label contains the name of their destination node; i.e., the routing tables need to be used to route these messages.
@@ -126,20 +127,23 @@ Other messages needed for 2PC : All 2PC-related messages must flow along graph e
 Other messages: (such as trace, dump, etc.) flow directly between nodes and ignore the network structure completely.
 Why this set up? Routed messages are the data in the network. The central purpose of the routing table is to route that data. Control messages flow along graph edges so that no global table containing the pids of all router processes has to exist. This is good distributed systems design: avoid central resources. Messages that are effectively answers to control messages need to flow opposite to how control messages flow; control messages contain the From argument to allow for such direct replies.
 
-Implementation Hints and Further Instructions
-Further Instructions
+# Implementation Hints and Further Instructions
+
+## Further Instructions
 Consider whether it is possible that, after a 2PC aborts, there may be messages in the network that will never be consumed so that repeated occurrences of such events slowly fill up the mailbox of individual processes. Implement measures to prevent that garbage from accumulating in mailboxes.
 Consider how to handle simultaneous control requests in the network. In particular you must ensure that two simultaneous control requests (and therefore 2PCs) do not interfere with each other. You can abort one or the other, or both -- it is up to you what you decide to do, but make sure to document your designs decisions in the DESIGN doc.
-Implementation Hints
+
+## Implementation Hints
 The following are merely hints to help you. You are not required to proceed as indicated here if you prefer an alternative implementation.
 
 The module lists contains a number of useful functions that may save you some coding.
 Erlang exceptions can make the code significantly more elegant.
 Look at the FAQ slides (PDF) for some helpful information and examples.
-Testing Code
+
+# Testing Code
 Here follows some simple testing code to provide concrete examples of the use of the router network. However, please note that this code is not sufficient to completely test a solution to this assignment. You will need to develop additional tests.
 
-A Simple Network Graph
+## A Simple Network Graph
 The following describes a simple network graph in the format expected by graphToNetwork/1. It describes the graph shown earlier in this specification:
 
 simpleNetworkGraph () ->
@@ -150,25 +154,11 @@ simpleNetworkGraph () ->
    {blue , [{green, [white, green, red]}]},
    {green, [{red, [red, blue, white]}]}
   ].
-A Simple Network Test
+## A Simple Network Test
 The Erlang module networkTest implements network validation against a graph specification of the network by exhaustive path coverage.
 
-A Network Reconfiguration Test
+## A Network Reconfiguration Test
 The Erlang module controlTest demonstrates the use of a control request by reversing the edge direction of a small (three node) cyclic graph. This module needs networkTest to operate.
 
-A Network Extension Test
+## A Network Extension Test
 The Erlang module extendTest demonstrates the use of the function control:extendNetwork/4. This module needs networkTest to operate.
-
-Deadline & Submission Procedure
-The submission deadline is Monday, 9 November 2020 (08:00 AEDT). Please follow the submission guidelines (otherwise, you may lose marks). In addition to your code, you have to submit a design document in a text file (pure ASCII text, nothing else) called DESIGN. This file must outline the design of your implementation and highlight any special features or shortcomings. You will receive style marks for this document. In particular, the following points must be addressed in the design document:
-
-Provide an exact description of the algorithm and protocol (including the format of the various messages and their semantics) used to implement two-phase commit.
-Provide an exact description of any extra messages you've introduced.
-Provide a description of how you implement the required functions (graphToNetwork and extendNetwork).
-Describe how you handle fault cases and conflicting control requests.
-We will automatically perform a simple test of your code upon submission (we call this test a dry run). This can help you check whether your code builds and runs as we expect it to. Note that this check is for convenience only. You are responsible for testing and making sure that your assignment works, even if the dry run is not availabe, or if the dry run is incorrect! You will be allowed to submit even if your code does not pass the dry run test.
-
-Make sure that you disable printing of debug messages in your submission. Debug output has a tendency to obscure actual program output and can interfere with auto-marking. It is good programming practice to include mechanisms to easily enable or disable debugging output, and to release code with debugging output disabled by default.
-
-
-This page is maintained by cs9243@cse.unsw.edu.au Last modified: Monday, 19-Oct-2020 14:42:24 AEDT
