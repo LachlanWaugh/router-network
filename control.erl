@@ -3,31 +3,13 @@
 
 graphToNetwork(Graph) ->
     ets:new(nodes, [named_table, set]),
-    Pid = graphInit(Graph),
-
-    sendMessage(),
-
-    deleteall(),
+    Pid = graphInit(Graph, 0),
     ets:delete(nodes),
+
     Pid.
 
-deleteall() ->
-    ets:foldl(fun({_, Pid}, DontCare) -> 
-            Pid ! stop,
-            DontCare
-        end, notused, nodes).
-
-sendMessage() ->
-    [{_, RedPid}] = ets:lookup(nodes, red),
-
-    RedPid ! {message, blue, self(), self(), []},
-
-    receive
-        {trace, Pid, Trace} -> io:format("~w ~p ~n", [Pid, Trace])
-    end.
-
 % Start all of the router processes
-graphInit(Graph) ->
+graphInit(Graph, SeqNum) ->
     {Name, Edges} = lists:nth(1, Graph),
     Pid = router:start(Name),
 
@@ -36,25 +18,35 @@ graphInit(Graph) ->
 
     if
         % if the list has more elements, add them
-        length(Graph) > 1 -> graphInit(lists:nthtail(1, Graph));
+        length(Graph) > 1 -> graphInit(lists:nthtail(1, Graph), SeqNum);
         true ->              Pid
     end,
 
     % Convert the list of edges into the correct format for the routing table
     List = lists:flatten(lists:map(fun(E) ->
-            {Route, Dest} = E,
-            % Replace the name of the routing node with it's PID
-            [{_, RPid}] = ets:lookup(nodes, Route),
-            % Convert {white, [white, green]} -> [{white, whitepid}, {green, whitepid}]
-            lists:zip(Dest, lists:duplicate(length(Dest), RPid))
-        end, Edges)),
+        {Route, Dest} = E,
+        % Replace the name of the routing node with it's PID
+        [{_, RPid}] = ets:lookup(nodes, Route),
+        % Convert {white, [white, green]} -> [{white, whitepid}, {green, whitepid}]
+        lists:zip(Dest, lists:duplicate(length(Dest), RPid))
+    end, Edges)),
 
     % Send the routing table to the router
-    Pid ! {control, self(), self(), 0, fun(Table) -> 
-            ets:insert(Table, List),
-            []
-        end},
+    Pid ! {control, self(), self(), SeqNum,
+        fun(_, Table) -> ets:insert(Table, List), []
+    end},
 
     Pid.
 
-% extendNetwork(RootPid, SeqNum, From, {NodeName, Edges}) -> extendNetwork/4
+% extendNetwork(RootPid, SeqNum, From, {NodeName, Edges}) ->
+%     Pid = graphInit([{NodeName, Edges}], SeqNum),
+    
+%     % Send the rootpid the request to include the node
+%     RootPid ! {control, self(), self(), SeqNum, fun(_) ->
+%         ___ end},
+
+%     RootPid,
+%     SeqNum,
+%     From,
+%     NodeName,
+%     Edges.

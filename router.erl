@@ -1,16 +1,25 @@
 -module(router).
 -export([start/1]).
 
+% 
 start(RouterName) ->
     % Start the process
-    Pid = spawn(fun() -> loop(RouterName, ets:new(routing, [private,set])) end),
-    io:format("~w: ~w ~n", [RouterName, Pid]),
+    Pid = spawn(fun() -> loop(RouterName, 
+                ets:new(routing, [private,set]), []) end),
     Pid.
 
+% 
 stop(Routing) ->
+    % Message all nodes to remove this node
+    ets:foldl(fun({_, Pid}, DontCare) -> 
+        Pid ! stop, 
+        DontCare
+    end, notused, Routing),
+
     ets:delete(Routing),
     exit(normal).
 
+%
 message(Name, Routing, Dest, Pid, Trace) ->
     % Determine if this router is the destination
     if
@@ -25,32 +34,64 @@ message(Name, Routing, Dest, Pid, Trace) ->
             end
     end.
 
-control(Routing, Pid, SeqNum, ControlFun) ->
-    case SeqNum of
-        % Initialization
-        0    -> Children = ControlFun(Routing);
-        true -> Children = abort
+%
+control(Name, Routing, FuncList, From, Pid, SeqNum, ControlFun) ->
+    % Complete the control request if it has not already been completed
+    case list:member(SeqNum, FuncList) of
+        true  -> Children = none;
+        false ->
+            TempRouting = ets:new(temp, [private,set]),
+            Children = ControlFun(Name, TempRouting),
+            lists:append(FuncList, [SeqNum]),
+
+            % If the control request is not an initialization, propagate it
+            case SeqNum of
+                0    -> true;
+                true -> Children = propagate(Children, Routing, 
+                                             Pid, SeqNum, ControlFun)
+            end
     end,
 
+    % Send a response to the node that sent the message
     case Children of
-        abort -> Pid ! {abort, self(), SeqNum};
-        _Else -> Pid ! {commited, self(), SeqNum}
-    end,
-    Children.
+        none  ->
+            From ! {done, self(), SeqNum},
+            Routing;
+        abort ->
+            % Send the abort message to all children
+            From ! {abort, self(), SeqNum},
+            ets:delete(TempRouting),
+            Routing;
+        _Else -> 
+            ets:delete(Routing),
+            From ! {commited, self(), SeqNum},
+            TempRouting
+    end.
 
-loop(Name, Routing) ->
+%
+propagate(Routing, Pid, SeqNum, ControlFun) ->
+    ets:foldl(fun({_, RPid}, DontCare) ->
+        RPid ! {control, self(), Pid, SeqNum, ControlFun},
+        % Wait for a response
+        receive
+            {committed, RPid, SeqNum} -> committed;
+            {abort, RPid, SeqNum}     -> abort;
+            {done, RPid, SeqNum}      -> committed
+        end
+    end, notused, Routing).
+
+% Name:     the name of the router
+% Routing:  the routing table for the router
+% FuncList  a list of all SeqNum's that have been performed
+loop(Name, Routing, FuncList) ->
     receive
         {message, Dest, From, Pid, Trace} ->
-            io:format("~w received message from ~w ~n", [Name, From]),
             message(Name, Routing, Dest, Pid, Trace),
             From;
         {control, From, Pid, SeqNum, ControlFun} ->
-            control(Routing, Pid, SeqNum, ControlFun),
-            From;
+            Routing = control(Name, Routing, FuncList, From, Pid, SeqNum, ControlFun),
         {dump, From} -> From ! {table, self(), ets:match(Routing, '$1')};
         stop         -> stop(Routing)
     end,
 
-    loop(Name, Routing).
-
-% c(control), c(router), c(test), test:runTest().
+    loop(Name, Routing, FuncList).

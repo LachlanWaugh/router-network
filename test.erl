@@ -13,3 +13,7 @@ runTest() ->
     Graph = simpleNetworkGraph(),
     Pid = control:graphToNetwork(Graph),
     io:format("Pid = ~w ~n", [Pid]).
+
+% c(control), c(router), c(test), test:runTest().
+% c(control), c(router), c(networkTest), networkTest:runTest().
+% c(control), c(router), c(networkTest), c(controlTest), controlTest:runTest().
