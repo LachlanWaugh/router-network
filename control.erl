@@ -38,6 +38,7 @@ graphInit(Graph, SeqNum) ->
 
     Pid.
 
+%
 % extendNetwork(RootPid, SeqNum, From, {NodeName, Edges}) ->
 %     Pid = graphInit([{NodeName, Edges}], SeqNum),
     
