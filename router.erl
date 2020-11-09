@@ -3,8 +3,8 @@
 
 %
 start(RouterName) ->
-    % Start the process
     Pid = spawn(fun() -> loop(RouterName, ets:new(routing, [private,set])) end),
+    % io:format("DEBUG: Node ~w Pid ~w ~n", [RouterName, Pid]),
     Pid.
 
 %
@@ -31,33 +31,32 @@ control(Name, Routing, _, Pid, 0, ControlFun) ->
 % Otherwise, handle a normal control request
 control(Name, Routing, From, Pid, SeqNum, ControlFun) ->
     TempRouting = ets:new(temp, [private,set]),
+    ets:foldl(fun(E, _) -> ets:insert(TempRouting, E) end, notused, Routing),
     Children = ControlFun(Name, TempRouting),
 
     % Check whether the control function succeeded
     case Children of
-        abort -> doAbort(Name, Routing, TempRouting, From, SeqNum, PidList);
+        abort -> waitAbort(Name, Routing, TempRouting, From, Pid, SeqNum, []);
         _Else -> false
     end,
 
     % Attempt to propagate the message across the network
     try
+        % 2PC phase one, ask neighbours if they can commit
         PidList = checkNeighbours(Routing, From, Pid, SeqNum, ControlFun),
-        doCommit(Name, Routing, TempRouting, From, SeqNum, PidList)
+        % io:format("DEBUG: ~w reached control ~n", [self()]),
+        % 2PC phase two, wait for a doCommit or doAbort message from root
+        waitCommit(Name, Routing, TempRouting, From, Pid, SeqNum, PidList)
     catch
-        throw:{abort,   PidList} -> doAbort(Name, Routing, TempRouting, From, SeqNum, PidList);
-        throw:{aborted, PidList} -> 
+        % If at any time you receive an abort message, wait for an "aborted" message immediately
+        throw:{abort,   Pids} -> waitAbort(Name, Routing, TempRouting, From, Pid, SeqNum, Pids);
+        % If at any time you receive an aborted message, immediately skip to initiating doAbort
+        throw:{doAbort, Pids} -> doAbort(Name, Routing, TempRouting, From, SeqNum, Pids)
     end.
 
-% Propagate a message to all children
+% Propagate a message across all edges checking if all neighbours can commit
 checkNeighbours(Routing, From, Pid, SeqNum, ControlFun) ->
-    PidList = [],
-    % Find unique PIDs from the Routing Table (direct edges)
-    ets:foldl(fun({_, Dest}, _) -> 
-        case lists:member(Dest, PidList) of
-            false -> lists:append(PidList, [Dest]);
-            true  -> true
-        end
-    end, notused, Routing),
+    PidList = uniquePids(Routing, [], none),
 
     % propagate the control request around the network, and wait for canCommit or abort responses
     propagate(PidList, fun(Dest) -> 
@@ -71,58 +70,100 @@ checkNeighbours(Routing, From, Pid, SeqNum, ControlFun) ->
     PidList.
 
 %
-doCommit(Name, Routing, TempRouting, From, SeqNum, PidList) ->
+uniquePids(Routing, [], _) -> 
+    [{Name, Pid}] = ets:lookup(Routing, ets:first(Routing)),
+    uniquePids(Routing, [Pid], ets:next(Routing, Name));
+
+% If you've already seen the entire list, just return
+uniquePids(_, PidList, '$end_of_table') ->
+    PidList;
+
+%
+uniquePids(Routing, PidList, Name) ->
+    [{_, Pid}] = ets:lookup(Routing, Name),
+    case lists:member(Pid, PidList) of
+        false -> uniquePids(Routing, lists:append(PidList, [Pid]), ets:next(Routing, Name));
+        true  -> uniquePids(Routing, PidList, ets:next(Routing, Name))
+    end.
+
+% If this is the root router (From == Pid) don't wait for a doCommit message
+waitCommit(Name, Routing, TempRouting, Pid, Pid, SeqNum, PidList) ->
+    % io:format("DEBUG: ~w progagating doCommit ~n", [self()]),
+    Pid ! {committed, self(), SeqNum},
+    doCommit(Name, Routing, TempRouting, SeqNum, PidList);
+
+% If this isn't the root router, you need to wait for a doCommit message
+waitCommit(Name, Routing, TempRouting, From, _, SeqNum, PidList) ->
+    % io:format("DEBUG: ~w waiting for doCommit ~n", [self()]),
+
     % Wait for a doCommit or doAbort message
     case request(From, From, SeqNum, {canCommit, self(), SeqNum}) of
-        aborted -> throw({aborted, PidList});
+        doAbort -> throw({doAbort, PidList});
         abort   -> throw({aborted, PidList});
         _Else   -> true
-    end
+    end,
+    doCommit(Name, Routing, TempRouting, SeqNum, PidList).
 
+% (after receiving doCommit) propagate doCommit messages across the network and commit the change
+doCommit(Name, Routing, TempRouting, SeqNum, PidList) ->
     % Propagate the doCommit message across the network
-    propagate(PidList, fun(Dest) -> request(From, Dest, {doCommit, self(), SeqNum}) end),
-
+    propagate(PidList, fun(Dest) -> Dest ! {doCommit, self(), SeqNum} end),
     ets:delete(Routing),
     loop(Name, TempRouting).
 
-%
-doAbort(Name, Routing, TempRouting, From, SeqNum, PidList)  -> 
-    % Wait for the doAbort message
+% If this is the root router, don't wait for a doAbort message
+waitAbort(Name, Routing, TempRouting, Pid, Pid, SeqNum, PidList) ->
+    Pid ! {abort, self(), SeqNum},
+    doAbort(Name, Routing, TempRouting, Pid, SeqNum, PidList);
+
+% wait for a doAbort message from the previous
+waitAbort(Name, Routing, TempRouting, From, _, SeqNum, PidList) ->
     case request(From, From, SeqNum, {abort, self(), SeqNum}) of
         aborted -> true;
         _Else   -> io:format("Bad abort. ~n")
     end,
 
+    doAbort(Name, Routing, TempRouting, From, SeqNum, PidList).
+% (After receiving a doAbort message) propagate the doAbort message to neighbours and abort
+doAbort(Name, Routing, TempRouting, From, SeqNum, PidList)  -> 
     % Propagate a doAbort message to all children
-    propagate(PidList, fun(Dest) -> request(From, Dest, {doAbort, self(), SeqNum}) end),
+    propagate(PidList, fun(Dest) -> request(From, Dest, SeqNum, {doAbort, self(), SeqNum}) end),
 
     ets:delete(TempRouting),
     loop(Name, Routing).
 
-% Invokes MsgFunc() on all nodes directly connected
+% If the PidList is empty, just return
+propagate([], _) -> true;
+% Invokes MsgFunc() on all PIDs in PidList
 propagate(PidList, MsgFunc) ->
-    list:foldl(fun({_, Dest}, _) -> MsgFunc(Dest) end, notused, PidList).
+    lists:foldl(fun(Pid, _) -> MsgFunc(Pid) end, notused, PidList).
 
 % Otherwise
 request(From, Dest, SeqNum, Message) ->
+    % io:format("DEBUG: ~w Entering commitloop ~w ~n", [self(), Message]),
+
     Dest ! Message,
     Result = commitloop(Dest, From, SeqNum),
+    % io:format("DEBUG: Loop exited: ~w ~n", [Result]),
     Result.
 %
 commitloop(Dest, From, SeqNum) ->
     receive
         % If you get another control request of the same type, ignore it
-        {control, FromPid, _, SeqNum, _} -> 
+        {control, FromPid, _, SeqNum, _}   -> 
             FromPid ! {canCommit, self(), SeqNum},
-            commitloop(Dest, SeqNum);
-        % If you get a control request of a different number, abort both
-        {control, FromPid, _, OtherNum, _} -> 
+            commitloop(Dest, From, SeqNum);
+        % If you get a control request of a different number, abort it
+        {control, FromPid, _, OtherNum, _} ->
             FromPid ! {abort, self(), OtherNum},
-            abort;
+            commitloop(Dest, From, SeqNum);
+        % First phase messages
         {canCommit, Dest, SeqNum} -> canCommit;
         {abort,     Dest, SeqNum} -> abort;
-        {doCommit,  From, SeqNum} -> committed;
-        {doAbort,   From, SeqNum} -> aborted;
+        % Second phase messages
+        {doCommit,  From, SeqNum} -> doCommit;
+        {doAbort,   From, SeqNum} -> doAbort
+    after 5000 -> abort
     end.
 
 % Name:     the name of the router
@@ -132,6 +173,7 @@ loop(Name, Routing) ->
         {message, Dest, _, Pid, Trace} ->
             message(Name, Routing, Dest, Pid, Trace);
         {control, From, Pid, SeqNum, ControlFun} ->
+            % io:format("DEBUG: ~w received control message ~n", [self()]),
             control(Name, Routing, From, Pid, SeqNum, ControlFun);
         {dump, From} -> From ! {table, self(), ets:match(Routing, '$1')};
         stop         -> stop(Routing)
