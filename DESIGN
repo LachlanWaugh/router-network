@@ -1,1 +1,16 @@
-TODO
+router.erl
+
+loop(...)  
+    after starting a router, it will begin invoking this message queue loop, which will forward the message to the relevant function.
+
+message(...)
+    Pattern matches this router's Name against Dest, if it matches append your name to the trace and send it back, otherwise find Dest in Routing table and pass the message on
+
+control(...)
+    Pattern matches SeqNum with 0, if it matches you know its an initialization.
+    Otherwise go into the normal propagation control message function.
+    
+
+control(...)
+
+control.erl

@@ -32,4 +32,4 @@ runTest() ->
 
 % c(control), c(router), c(networkTest), networkTest:runTest().
 % c(control), c(router), c(networkTest), c(controlTest), controlTest:runTest().
-% c(control), c(router), c(networkTest), c(controlTest), c(extendTest), extendTest:runTest().
+% c(control), c(router), c(networkTest), c(controlTest), c(extendTest), extendTest:runTest(). 
