@@ -25,8 +25,8 @@ message(Name, Routing, Dest, Pid, Trace) ->
 % If a control message has SeqNum 0, it is an initialization
 control(Name, Routing, _, Pid, 0, ControlFun) ->
     case ControlFun(Name, Routing) of
-        abort -> Pid ! {initabort, self(), 0};
-        _Else -> Pid ! {initcommitted, self(), 0}
+        abort -> Pid ! {abort, self(), 0};
+        _Else -> Pid ! {committed, self(), 0}
     end;
 % Otherwise, handle a normal control request
 control(Name, Routing, From, Pid, SeqNum, ControlFun) ->
