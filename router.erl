@@ -25,8 +25,8 @@ message(Name, Routing, Dest, Pid, Trace) ->
 % If a control message has SeqNum 0, it is an initialization
 control(Name, Routing, _, Pid, 0, ControlFun) ->
     case ControlFun(Name, Routing) of
-        abort -> Pid ! {abort, self(), 0};
-        _Else -> Pid ! {committed, self(), 0}
+        abort -> Pid ! {initabort, self(), 0};
+        _Else -> Pid ! {initcommitted, self(), 0}
     end;
 % Otherwise, handle a normal control request
 control(Name, Routing, From, Pid, SeqNum, ControlFun) ->
@@ -109,28 +109,27 @@ doCommit(Name, Routing, TempRouting, SeqNum, PidList) ->
     % Propagate the doCommit message across the network
     propagate(PidList, fun(Dest) -> Dest ! {doCommit, self(), SeqNum} end),
     ets:delete(Routing),
-    loop(Name, TempRouting).
+    cleanQueue(Name, TempRouting, SeqNum).
 
 % If this is the root router, don't wait for a doAbort message
 waitAbort(Name, Routing, TempRouting, Pid, Pid, SeqNum, PidList) ->
     Pid ! {abort, self(), SeqNum},
     doAbort(Name, Routing, TempRouting, Pid, SeqNum, PidList);
 
-% wait for a doAbort message from the previous
+% wait for a doAbort message then initiate the abort
 waitAbort(Name, Routing, TempRouting, From, _, SeqNum, PidList) ->
     case request(From, From, SeqNum, {abort, self(), SeqNum}) of
-        aborted -> true;
-        _Else   -> io:format("Bad abort. ~n")
+        doAbort -> true;
+        _Else   -> io:format("Bad abort. ~w ~n", [self()])
     end,
-
     doAbort(Name, Routing, TempRouting, From, SeqNum, PidList).
+
 % (After receiving a doAbort message) propagate the doAbort message to neighbours and abort
 doAbort(Name, Routing, TempRouting, From, SeqNum, PidList)  -> 
     % Propagate a doAbort message to all children
     propagate(PidList, fun(Dest) -> request(From, Dest, SeqNum, {doAbort, self(), SeqNum}) end),
-
     ets:delete(TempRouting),
-    loop(Name, Routing).
+    cleanQueue(Name, Routing, SeqNum).
 
 % If the PidList is empty, just return
 propagate([], _) -> true;
@@ -141,12 +140,26 @@ propagate(PidList, MsgFunc) ->
 % Otherwise
 request(From, Dest, SeqNum, Message) ->
     % io:format("DEBUG: ~w Entering commitloop ~w ~n", [self(), Message]),
-
     Dest ! Message,
     Result = commitloop(Dest, From, SeqNum),
     % io:format("DEBUG: Loop exited: ~w ~n", [Result]),
     Result.
-%
+
+% Remove any messages pertaining to the recently completed 2PC out of the message queue
+cleanQueue(Name, Routing, SeqNum) ->
+    receive
+        {control, _, _, SeqNum, _} -> true;
+        {canCommit, _, SeqNum}     -> true;
+        {abort,     _, SeqNum}     -> true;
+        {doCommit,  _, SeqNum}     -> true;
+        {doAbort,   _, SeqNum}     -> true
+    % Give it 1 seconds to make sure no more will be coming in
+    after 10 -> loop(Name, Routing)
+    end,
+
+    cleanQueue(Name, Routing, SeqNum).
+
+
 commitloop(Dest, From, SeqNum) ->
     receive
         % If you get another control request of the same type, ignore it
